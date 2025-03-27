@@ -2,7 +2,9 @@ import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
 
+##################
 ### Parameters ###
+##################
 
 # Dimensions: Time, Goods, N-scenarios
 
@@ -46,7 +48,20 @@ raw_lead_times = [1, 1, 2, 1] # B, G, R, Y
 
 initial_hours = 300 # Given in problem
 
+## Costs
+c_X = 130
+c_Y = -130
+c_S = [-100, -130, -115]
+c_I = [4.5, 5.5, 5]
+c_R = [5, 5, 15, 10]
+c_Ir = [1.5, 1.5, 3.1, 2.2]
+c_L = 12
+c_O = 18
+
+#############
 ### Model ###
+#############
+
 m = gp.Model("Aggregate_Production")
 
 ## Decision Variables
@@ -58,6 +73,8 @@ m = gp.Model("Aggregate_Production")
         
 # Deterministic Decision Variables
 P = m.addVars(T, goods, lb = 0, vtype=GRB.INTEGER) # Production
+X = m.addVars(T, goods, lb = 0, vtype=GRB.BINARY) # Production Set-ups
+Y = m.addVars(T[1:], lb = 0, vtype=GRB.BINARY) # Set-up carry-over
 O = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Overtime hours
 L = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Labor Hours
 L_quarter = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Labor available for each quarter
@@ -68,6 +85,7 @@ F = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Firing for each quarter
 
 U = m.addVars(T, raws, lb = 0, vtype=GRB.INTEGER) # Use raw materials
 R = m.addVars(T, raws, lb = 0, vtype=GRB.INTEGER) # Purchasing raw materials
+Z = m.addVars(T, raws, lb = 0, vtype=GRB.BINARY)  # Order required 
 
 I_init = m.addVars(goods, lb = 0, ub = 20, vtype = GRB.INTEGER) # Initial inventory
     # Note: We are only allowed up to 20 units in our starting inventory
@@ -98,6 +116,9 @@ m.addConstrs(S[t, g, n] <= D[t, g, n] for t in T for g in goods for n in N)
 
 # Labor in each period must sum to the labor available for the quarter
 m.addConstrs(gp.quicksum(L[t] for t in range((q+1)*3-3, (q+1)*3)) == L_quarter[q] for q in Q)
+
+# Labor by period - including the CDC will be annoying
+# TDL
 
 # Labor in the quarter must be a multiple of three
 m.addConstrs(L_quarter[q] == 3 * aux[q] for q in Q)
@@ -131,14 +152,38 @@ m.addConstrs(P[t, 0] + P[t, 1] <= U[t, 1] for t in T) #    Pears     used for A 
 m.addConstrs(P[t, 1] <= U[t, 2] for t in T)           # Strawberries used for B
 m.addConstrs(P[t, 2] <= U[t, 3] for t in T)           #   Bananas    used for C
 
+## Set Ups
+
+# First, determine when set-ups are required
+m.addConstrs(P[t, g] <= 1000 * X[t, g] for g in goods for t in T)
+
+# Second, determine if a set-up can be carried over
+m.addConstrs(Y[t] <= gp.quicksum(X[t, g] + X[t-1, g] for g in goods) for t in T[1:])
+
+# Raw material orders
+m.addConstrs(R[t, r] <= 1000 * Z[t, r] for r in raws for t in T)
+
+
+
+
+## Objective Function
+m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[g, t, n] for g in goods for t in T for n in N)
+             + gp.quicksum(c_X * X[t, g] for g in goods for t in T)
+             + gp.quicksum(c_Y * Y[t] for t in T[1:])
+             + gp.quicksum((1/num_scenarios) * c_I[g] * I[g, t, n] for g in goods for t in T for n in N)
+             + gp.quicksum(c_Ir[r] * I_r[t, r] for r in raws for t in T)
+             + gp.quicksum(c_L * L[t] for t in T)
+             + gp.quicksum()
+             )
+
+
+
 
 m.optimize()
 
 # TDL:
-    # Set ups - Diran
     # Labor Shortage - Diran or Ben
     # Objective function - Ben
-    # Contracts - idk we weren't given info on it but I know they exist
 
 ## Everything below here is untouched ##
 

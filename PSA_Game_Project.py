@@ -14,7 +14,7 @@ Q = [q for q in range(3)] # Q = quarters
 goods = [i for i in range(3)] # g = goods
 raws = [i for i in range(4)] # r = raw materials
 
-num_scenarios = 100 # for now
+num_scenarios = 1000 # for now
 N = [n for n in range(num_scenarios)]
 
 # D[t, g, n] = Demand for good g at time t in scenario n
@@ -48,6 +48,8 @@ raw_lead_times = [1, 1, 2, 1] # B, G, R, Y
 
 initial_hours = 300 # Given in problem
 
+expected_quality = [1, 1, 0.95, 0.9] # For ordering raw materials
+
 ## Costs
 c_X = 130
 c_Y = -130
@@ -57,6 +59,11 @@ c_R = [5, 5, 15, 10]
 c_Ir = [1.5, 1.5, 3.1, 2.2]
 c_L = 12
 c_O = 18
+c_I_init = [30, 60, 45]
+c_Ir_init = [5+1.5, 5+1.5, 15+3.1, 10+2.2]
+c_Z = 75
+c_F = 8
+c_H = 6
 
 #############
 ### Model ###
@@ -136,15 +143,15 @@ m.addConstrs(L[t] + O[t] >= gp.quicksum(P[t, g] * labor_requirements[g] for g in
 ## Raw Material Requirements
 
 # Initial
-m.addConstrs(I_r_init[r] + R[0, r] - U[0, r] == I_r[0, r] for r in [0, 1, 3])
+m.addConstrs(I_r_init[r] + expected_quality[r] * R[0, r] - U[0, r] == I_r[0, r] for r in [0, 1, 3])
 
 # Balance - All the parts with one week lead time are easy
-m.addConstrs(I_r[t,r] == I_r[t-1, r] + R[t-1, r] - U[t, r] for r in [0, 1, 3] for t in T[1:])
+m.addConstrs(I_r[t,r] == I_r[t-1, r] + expected_quality[r] * R[t-1, r] - U[t, r] for r in [0, 1, 3] for t in T[1:])
 
 # Strawberries - lead time is 2 weeks, which makes life a little more tricky
 m.addConstr(I_r[0, 2] == I_r_init[2] - U[0, 2]) # First Time period
 m.addConstr(I_r[1, 2] == I_r[0, 2] - U[1, 2]) # Second time period
-m.addConstrs(I_r[t, 2] == I_r[t-1, 2] - U[t, 2] + R[t-2, 2] for t in T[2:]) # Rest of the periods
+m.addConstrs(I_r[t, 2] == I_r[t-1, 2] - U[t, 2] + expected_quality[2] * R[t-2, 2] for t in T[2:]) # Rest of the periods
 
 # Raw Materials limiting Production
 m.addConstrs(P[t, 0] + P[t, 2] <= U[t, 0] for t in T) # Blueberries  used for A and C
@@ -167,19 +174,23 @@ m.addConstrs(R[t, r] <= 1000 * Z[t, r] for r in raws for t in T)
 
 
 ## Objective Function
-m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[g, t, n] for g in goods for t in T for n in N)
+m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[t, g, n] for g in goods for t in T for n in N)
              + gp.quicksum(c_X * X[t, g] for g in goods for t in T)
              + gp.quicksum(c_Y * Y[t] for t in T[1:])
-             + gp.quicksum((1/num_scenarios) * c_I[g] * I[g, t, n] for g in goods for t in T for n in N)
+             + gp.quicksum((1/num_scenarios) * c_I[g] * I[t, g, n] for g in goods for t in T for n in N)
              + gp.quicksum(c_Ir[r] * I_r[t, r] for r in raws for t in T)
              + gp.quicksum(c_L * L[t] for t in T)
-             + gp.quicksum()
+             + gp.quicksum(c_L * L[t] for t in T)
+             + gp.quicksum(c_I_init[g] * I_init[g] for g in goods)
+             + gp.quicksum(c_Ir_init[r] * I_r_init[r] for r in raws)
+             + gp.quicksum(c_Z * Z[t, r] for t in T for r in raws)
+             + gp.quicksum(c_H * H[q] for q in Q)
+             + gp.quicksum(c_F * F[q] for q in Q)
              )
 
 
-
-
 m.optimize()
+
 
 # TDL:
     # Labor Shortage - Diran or Ben
@@ -187,7 +198,7 @@ m.optimize()
 
 ## Everything below here is untouched ##
 
-
+"""
 if m.status != gp.GRB.OPTIMAL:
     m.feasRelax(0, False, None, None, None, None, None)
     m.optimize()
@@ -286,3 +297,10 @@ for p in range(periods):
 profit = rev - fixed_cost - hold_total
 print("\nSimulation Results (100k iterations):")
 print(f"Avg Rev: ${np.mean(rev):.2f}, Fixed Cost: ${fixed_cost:.2f}, Avg Hold: ${np.mean(hold_total):.2f}, Avg Lost: {np.mean(lost_total):.2f}, Avg Profit: ${np.mean(profit):.2f}")
+"""
+print()
+
+
+
+
+

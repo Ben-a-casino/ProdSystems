@@ -14,7 +14,7 @@ Q = [q for q in range(3)] # Q = quarters
 goods = [i for i in range(3)] # g = goods
 raws = [i for i in range(4)] # r = raw materials
 
-num_scenarios = 1000 # for now
+num_scenarios = 100 # for now
 N = [n for n in range(num_scenarios)]
 
 # D[t, g, n] = Demand for good g at time t in scenario n
@@ -75,8 +75,8 @@ for n in N:
     
 ## Costs
 c_X = 130
-c_Y = -130
-c_S = [-100, -130, -115]
+c_Z = -130
+c_S = np.array([-100, -130, -115])
 c_I = [4.5, 5.5, 5]
 c_R = [5, 5, 15, 10]
 c_Ir = [1.5, 1.5, 3.1, 2.2]
@@ -84,7 +84,7 @@ c_L = 12
 c_O = 18
 c_I_init = [30, 60, 45]
 c_Ir_init = [5+1.5, 5+1.5, 15+3.1, 10+2.2]
-c_Z = 75
+c_V = 75
 c_F = 8
 c_H = 6
 
@@ -104,7 +104,8 @@ m = gp.Model("Aggregate_Production")
 # Deterministic Decision Variables
 P = m.addVars(T, goods, lb = 0, vtype=GRB.INTEGER) # Production
 X = m.addVars(T, goods, lb = 0, vtype=GRB.BINARY) # Production Set-ups
-Y = m.addVars(T[1:], lb = 0, vtype=GRB.BINARY) # Set-up carry-over
+Y = m.addVars(T[1:], goods, lb = 0, vtype=GRB.BINARY) # Set-up carry-over
+Z = m.addVars(T[1:], lb=0, vtype=GRB.BINARY) # Max Set-up saves
 L = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Labor Hours 
 O = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Overtime hours
 L_quarter = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Labor available for each quarter
@@ -115,7 +116,7 @@ F = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Firing for each quarter
 
 U = m.addVars(T, raws, lb = 0, vtype=GRB.INTEGER) # Use raw materials
 R = m.addVars(T, raws, lb = 0, vtype=GRB.INTEGER) # Purchasing raw materials
-Z = m.addVars(T, raws, lb = 0, vtype=GRB.BINARY)  # Order required 
+V = m.addVars(T, raws, lb = 0, vtype=GRB.BINARY)  # Order required 
 
 I_init = m.addVars(goods, lb = 0, ub = 20, vtype = GRB.INTEGER) # Initial inventory
     # Note: We are only allowed up to 20 units in our starting inventory
@@ -135,10 +136,12 @@ I = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Inventory - because of s
 m.addConstrs(I_init[g] + P[0, g] - S[0, g, n] == I[0, g, n] for g in goods for n in N)
 
 # Balance
-m.addConstrs(I[t, g, n] == I[t-1, g, n] + P[t-1, g] - S[0, g, n] for g in goods for t in T[1:] for n in N)
+m.addConstrs(I[t, g, n] == I[t-1, g, n] + P[t-1, g] - S[t, g, n] for g in goods for t in T[1:] for n in N)
 
 # Sales can never be higher than demand
 m.addConstrs(S[t, g, n] <= D[t, g, n] for t in T for g in goods for n in N)
+m.addConstrs(S[t, g, n] <= I[t, g, n] for t in T for g in goods for n in N) # Technically unecessary
+
     # This allows profits to be tied to the variations in demand
 
 
@@ -184,34 +187,38 @@ m.addConstrs(P[t, 2] <= U[t, 3] for t in T)           #   Bananas    used for C
 
 # First, determine when set-ups are required
 m.addConstrs(P[t, g] <= 1000 * X[t, g] for g in goods for t in T)
+m.addConstrs(X[t, g] <= P[t, g] for g in goods for t in T)
 
 # Second, determine if a set-up can be carried over
-m.addConstrs(Y[t] <= gp.quicksum(X[t, g] + X[t-1, g] for g in goods) for t in T[1:])
+m.addConstrs(Y[t,g] <= X[t, g] + X[t-1, g] for g in goods for t in T[1:])
+
+# Finally, only save one set up
+m.addConstrs(Z[t] <= gp.quicksum(Y[t,g] for g in goods) for t in T[1:])
 
 # Raw material orders
-m.addConstrs(R[t, r] <= 1000 * Z[t, r] for r in raws for t in T)
+m.addConstrs(R[t, r] <= 1000 * V[t, r] for r in raws for t in T)
 
 
 
 
+    
 ## Objective Function
 m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[t, g, n] for g in goods for t in T for n in N)
              + gp.quicksum(c_X * X[t, g] for g in goods for t in T)
-             + gp.quicksum(c_Y * Y[t] for t in T[1:])
+             + gp.quicksum(c_Z * Z[t] for t in T[1:])
              + gp.quicksum((1/num_scenarios) * c_I[g] * I[t, g, n] for g in goods for t in T for n in N)
              + gp.quicksum(c_Ir[r] * I_r[t, r] for r in raws for t in T)
              + gp.quicksum(c_L * L[t] for t in T)
              + gp.quicksum(c_O * O[t] for t in T)
              + gp.quicksum(c_I_init[g] * I_init[g] for g in goods)
              + gp.quicksum(c_Ir_init[r] * I_r_init[r] for r in raws)
-             + gp.quicksum(c_Z * Z[t, r] for t in T for r in raws)
+             + gp.quicksum(c_V * V[t, r] for t in T for r in raws)
              + gp.quicksum(c_H * H[q] for q in Q)
              + gp.quicksum(c_F * F[q] for q in Q)
              )
 
 
 m.optimize()
-
 # TDL:
     # Labor Shortage - Diran or Ben
     # Objective function - Ben

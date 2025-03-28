@@ -145,7 +145,7 @@ m.addConstrs(S[t, g, n] <= D[t, g, n] for t in T for g in goods for n in N)
 ## Labor and overtime constraints
 
 # Labor in each period must a third of the labor in the quarter
-m.addConstrs(L[t, n] == (1/3) * L_quarter[q] for q in Q for n in N for t in range((q+1)*3-3, (q+1)*3))
+m.addConstrs(L[t] == (1/3) * L_quarter[q] for q in Q for t in range((q+1)*3-3, (q+1)*3))
 
 # Labor in the quarter must be a multiple of three
 m.addConstrs(L_quarter[q] == 3 * aux[q] for q in Q)

@@ -30,6 +30,7 @@ d_stds = np.array([
     [4,4,8], [4,4,8], [4,4,8]
 ])
 
+
 # D[t, g, n] = demand for at time t for good g in scenario n
 D = np.array([[np.random.normal(d_means[t, g], d_stds[t, g], num_scenarios) for g in goods] for t in T])
     # Double checked all the dimensions, the above comment is correct
@@ -50,6 +51,28 @@ initial_hours = 300 # Given in problem
 
 expected_quality = [1, 1, 0.95, 0.9] # For ordering raw materials
 
+## Simulating the pandemic
+
+# Goal: Construct the following variable:
+    # sick[t, n] = The fraction of workers absent at time t in scenario n
+# In a specific scenario, only one of the periods should have absentees
+    # Specifically, one of the last three periods
+# Up to 50% absent
+
+# First, determine which of the three periods will have the pandemic
+pandemic = np.random.randint(6, 9, num_scenarios)
+
+# Second, create the variable but assign all zeros
+sick = np.zeros((9, num_scenarios))
+
+# Recall np.random.rand() produces a random number between 0 and 1
+    # Therefore 0.5 * np.random.rand() produces a random number between 0 and 0.5
+    
+# Finally, replace a zero with absentees if the pandemic hits
+for n in N:
+    sick[pandemic[n], n] = np.random.rand() * 0.5
+
+    
 ## Costs
 c_X = 130
 c_Y = -130
@@ -82,8 +105,8 @@ m = gp.Model("Aggregate_Production")
 P = m.addVars(T, goods, lb = 0, vtype=GRB.INTEGER) # Production
 X = m.addVars(T, goods, lb = 0, vtype=GRB.BINARY) # Production Set-ups
 Y = m.addVars(T[1:], lb = 0, vtype=GRB.BINARY) # Set-up carry-over
+L = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Labor Hours 
 O = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Overtime hours
-L = m.addVars(T, lb = 0, vtype = GRB.INTEGER) # Labor Hours
 L_quarter = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Labor available for each quarter
 aux = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Auxiliary variable for later use
 H = m.addVars(Q, lb = 0, vtype = GRB.INTEGER) # Hiring for each quarter
@@ -102,8 +125,8 @@ I_r_init = m.addVars(raws, lb = 0, ub = 50, vtype=GRB.INTEGER) # Initial raw inv
     # Note: we are only allowed up to 50 units in our starting inventory
 
 # Scenario-Dependent Decision Variables
-S = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Sales
-I = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Inventory
+S = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Sales - because of demand
+I = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Inventory - because of sales
 
 
 ## Inventory balance constraints
@@ -121,24 +144,22 @@ m.addConstrs(S[t, g, n] <= D[t, g, n] for t in T for g in goods for n in N)
 
 ## Labor and overtime constraints
 
-# Labor in each period must sum to the labor available for the quarter
-m.addConstrs(gp.quicksum(L[t] for t in range((q+1)*3-3, (q+1)*3)) == L_quarter[q] for q in Q)
-
-# Labor by period - including the CDC will be annoying
-# TDL
+# Labor in each period must a third of the labor in the quarter
+m.addConstrs(L[t, n] == (1/3) * L_quarter[q] for q in Q for n in N for t in range((q+1)*3-3, (q+1)*3))
 
 # Labor in the quarter must be a multiple of three
 m.addConstrs(L_quarter[q] == 3 * aux[q] for q in Q)
+
 
 # Hiring and Firing
 m.addConstr(L_quarter[0] == 300 + H[0] - F[0]) # Initial
 m.addConstrs(L_quarter[q] == L_quarter[q-1] + H[q-1] - F[q-1] for q in Q[1:]) # Rest of the quarters
 
 # Overtime
-m.addConstrs(O[t] <= 1.5 * L[t] for t in T)
+m.addConstrs(O[t] <= 0.5 * L[t] for t in T)
 
-# Labor limiting Production
-m.addConstrs(L[t] + O[t] >= gp.quicksum(P[t, g] * labor_requirements[g] for g in goods) for t in T)
+# Labor limiting production
+m.addConstrs((1-sick[t, n]) * (L[t] + O[t]) >= gp.quicksum(P[t, g] * labor_requirements[g] for g in goods) for t in T for n in N)
 
 ## Raw Material Requirements
 
@@ -180,7 +201,7 @@ m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[t, g, n] for g in good
              + gp.quicksum((1/num_scenarios) * c_I[g] * I[t, g, n] for g in goods for t in T for n in N)
              + gp.quicksum(c_Ir[r] * I_r[t, r] for r in raws for t in T)
              + gp.quicksum(c_L * L[t] for t in T)
-             + gp.quicksum(c_L * L[t] for t in T)
+             + gp.quicksum(c_O * O[t] for t in T)
              + gp.quicksum(c_I_init[g] * I_init[g] for g in goods)
              + gp.quicksum(c_Ir_init[r] * I_r_init[r] for r in raws)
              + gp.quicksum(c_Z * Z[t, r] for t in T for r in raws)
@@ -190,7 +211,6 @@ m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[t, g, n] for g in good
 
 
 m.optimize()
-
 
 # TDL:
     # Labor Shortage - Diran or Ben

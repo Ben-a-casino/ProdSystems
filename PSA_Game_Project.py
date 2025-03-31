@@ -93,7 +93,7 @@ c_H = 6
 #############
 
 m = gp.Model("Aggregate_Production")
-
+m.setParam("MIPGap", 0.01)
 ## Decision Variables
     # All the inputs to the website are independent of the scenario
         # Production, labor, raw material purchasing, etc.

@@ -14,7 +14,7 @@ Q = [q for q in range(3)] # Q = quarters
 goods = [i for i in range(3)] # g = goods
 raws = [i for i in range(4)] # r = raw materials
 
-num_scenarios = 50000 # for now
+num_scenarios = 1000 # for now
 N = [n for n in range(num_scenarios)]
 
 # D[t, g, n] = Demand for good g at time t in scenario n
@@ -93,7 +93,7 @@ c_H = 6
 #############
 
 m = gp.Model("Aggregate_Production")
-m.setParam("MIPGap", 0.01)
+m.setParam("MIPGap", 0.05)
 ## Decision Variables
     # All the inputs to the website are independent of the scenario
         # Production, labor, raw material purchasing, etc.
@@ -148,7 +148,7 @@ m.addConstrs(S[t, g, n] <= I[t, g, n] for t in T for g in goods for n in N) # Te
 ## Labor and overtime constraints
 
 # Labor in each period must a third of the labor in the quarter
-m.addConstrs(L[t] == (1/3) * L_quarter[q] for q in Q for t in range((q+1)*3-3, (q+1)*3))
+m.addConstrs(L[t] == (1/3) * L_quarter[q] for q in Q for t in range((q*3, (q+1)*3)))
 
 # Labor in the quarter must be a multiple of three
 m.addConstrs(L_quarter[q] == 3 * aux[q] for q in Q)

@@ -1,6 +1,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
+from beautifultable import BeautifulTable
 
 ##################
 ### Parameters ###
@@ -55,12 +56,12 @@ expected_quality = [1, 1, 0.95, 0.9] # For ordering raw materials
 
 # Goal: Construct the following variable:
     # sick[t, n] = The fraction of workers absent at time t in scenario n
-# In a specific scenario, only one of the periods should have absentees
+# In a given scenario, only one of the periods should have absentees
     # Specifically, one of the last three periods
 # Up to 50% absent
 
 # First, determine which of the three periods will have the pandemic
-pandemic = np.random.randint(6, 9, num_scenarios)
+pandemic = np.random.randint(T[-3], T[-1], num_scenarios)
 
 # Second, create the variable but assign all zeros
 sick = np.zeros((9, num_scenarios))
@@ -93,7 +94,7 @@ c_H = 6
 #############
 
 m = gp.Model("Aggregate_Production")
-m.setParam("MIPGap", 0.05)
+m.setParam("MIPGap", 0.0005)
 ## Decision Variables
     # All the inputs to the website are independent of the scenario
         # Production, labor, raw material purchasing, etc.
@@ -135,20 +136,21 @@ I = m.addVars(T, goods, N, lb = 0, vtype=GRB.INTEGER) # Inventory - because of s
 # Initial
 m.addConstrs(I_init[g] + P[0, g] - S[0, g, n] == I[0, g, n] for g in goods for n in N)
 
+# No more than 20 total initial units in inventory
+m.addConstr(gp.quicksum(I_init[g] for g in goods) <= 20)
+
 # Balance
 m.addConstrs(I[t, g, n] == I[t-1, g, n] + P[t-1, g] - S[t, g, n] for g in goods for t in T[1:] for n in N)
 
 # Sales can never be higher than demand
 m.addConstrs(S[t, g, n] <= D[t, g, n] for t in T for g in goods for n in N)
-m.addConstrs(S[t, g, n] <= I[t, g, n] for t in T for g in goods for n in N) # Technically unecessary
-
     # This allows profits to be tied to the variations in demand
 
 
 ## Labor and overtime constraints
 
 # Labor in each period must a third of the labor in the quarter
-m.addConstrs(L[t] == (1/3) * L_quarter[q] for q in Q for t in range((q*3, (q+1)*3)))
+m.addConstrs(L[t] == (1/3) * L_quarter[q] for q in Q for t in range(q*3, (q+1)*3))
 
 # Labor in the quarter must be a multiple of three
 m.addConstrs(L_quarter[q] == 3 * aux[q] for q in Q)
@@ -167,7 +169,7 @@ m.addConstrs((1-sick[t, n]) * (L[t] + O[t]) >= gp.quicksum(P[t, g] * labor_requi
 ## Raw Material Requirements
 
 # Initial
-m.addConstrs(I_r_init[r] + expected_quality[r] * R[0, r] - U[0, r] == I_r[0, r] for r in [0, 1, 3])
+m.addConstrs(I_r_init[r] - U[0, r] == I_r[0, r] for r in [0, 1, 3])
 
 # Balance - All the parts with one week lead time are easy
 m.addConstrs(I_r[t,r] == I_r[t-1, r] + expected_quality[r] * R[t-1, r] - U[t, r] for r in [0, 1, 3] for t in T[1:])
@@ -178,16 +180,18 @@ m.addConstr(I_r[1, 2] == I_r[0, 2] - U[1, 2]) # Second time period
 m.addConstrs(I_r[t, 2] == I_r[t-1, 2] - U[t, 2] + expected_quality[2] * R[t-2, 2] for t in T[2:]) # Rest of the periods
 
 # Raw Materials limiting Production
-m.addConstrs(P[t, 0] + P[t, 2] <= U[t, 0] for t in T) # Blueberries  used for A and C
-m.addConstrs(P[t, 0] + P[t, 1] <= U[t, 1] for t in T) #    Pears     used for A and B
-m.addConstrs(P[t, 1] <= U[t, 2] for t in T)           # Strawberries used for B
-m.addConstrs(P[t, 2] <= U[t, 3] for t in T)           #   Bananas    used for C
+m.addConstrs(P[t, 0] + P[t, 2] == U[t, 0] for t in T) # Blueberries  used for A and C
+m.addConstrs(P[t, 0] + P[t, 1] == U[t, 1] for t in T) #    Pears     used for A and B
+m.addConstrs(P[t, 1] == U[t, 2] for t in T)           # Strawberries used for B
+m.addConstrs(P[t, 2] == U[t, 3] for t in T)           #   Bananas    used for C
 
 ## Set Ups
 
 # First, determine when set-ups are required
-m.addConstrs(P[t, g] <= 1000 * X[t, g] for g in goods for t in T)
-m.addConstrs(X[t, g] <= P[t, g] for g in goods for t in T)
+m.addConstrs(P[t, g] <= 200 * X[t, g] for g in goods for t in T)
+    # Note: 200 is based on observations from previous solutions
+    
+# m.addConstrs(X[t, g] <= P[t, g] for g in goods for t in T)
 
 # Second, determine if a set-up can be carried over
 m.addConstrs(Y[t,g] <= X[t, g] + X[t-1, g] for g in goods for t in T[1:])
@@ -196,7 +200,7 @@ m.addConstrs(Y[t,g] <= X[t, g] + X[t-1, g] for g in goods for t in T[1:])
 m.addConstrs(Z[t] <= gp.quicksum(Y[t,g] for g in goods) for t in T[1:])
 
 # Raw material orders
-m.addConstrs(R[t, r] <= 1000 * V[t, r] for r in raws for t in T)
+m.addConstrs(R[t, r] <= 200 * V[t, r] for r in raws for t in T)
 
 
 
@@ -219,41 +223,90 @@ m.setObjective(gp.quicksum((1/num_scenarios) * c_S[g] * S[t, g, n] for g in good
 
 
 m.optimize()
-# TDL:
-    # Labor Shortage - Diran or Ben
-    # Objective function - Ben
+
+# We use the package Beautiful Table to make our tables, well, beautiful
 
 # Aggregate Production Plan
-print("\nAggregate Production Plan")
-print("{:<8} {:<12} {:<20} {:<20} {:<15}".format("Quarter", "Demand", "Prod. Units", "Total Labor Hours", "Inventory"))
-for q in Q:
-    # Calculate the total demand for the quarter using the mean demands
-    quarter_demand = d_means[q*3:(q+1)*3].sum()
-    # Sum production over all periods in the quarter across all products
-    quarter_production = sum(P[t, g].X for t in range(q*3, (q+1)*3) for g in goods)
-    # Total labor hours is the sum of regular and overtime labor for the quarter
-    quarter_labor = sum(L[t].X + O[t].X for t in range(q*3, (q+1)*3))
-    # Average inventory at the end of the quarter (using the inventory at period q*3+2)
-    quarter_inventory = sum(I[q*3+2, g, n].X for g in goods for n in N) / num_scenarios
-    print("{:<8} {:<12} {:<20} {:<20} {:<15.2f}".format(q+1, quarter_demand, quarter_production, quarter_labor, quarter_inventory))
+print("\n\nAggregate Production Plan:")
+APP = BeautifulTable()
+APP.rows.append(["---"] + [d_means[q*3:(q+1)*3].sum() for q in Q])
+APP.rows.append(["---"] + [f"{sum(P[t, g].X for t in range(q*3, (q+1)*3) for g in goods):.0f}" for q in Q])
+APP.rows.append(["---"] + [f"{sum(L[t].X + O[t].X for t in range(q*3, (q+1)*3)):.0f}" for q in Q])
+APP.rows.append([int(sum(I_init[g].X for g in goods))] + [int(sum(I[q*3+2, g, n].X for g in goods for n in N) / num_scenarios) for q in Q])
+APP.rows.header = ["Demand (units)", "Production (units)", "Total Labor Hours", "Inventory"]
+APP.columns.header = ["Initial", "Q1", "Q2", "Q3"]
+APP.set_style(BeautifulTable.STYLE_GRID)
+print(APP)
+
+# Aggregate Production Plan Labor Hour Summary
+print("\n\nAggregate Production Plan – Labor Hour Summary")
+APL = BeautifulTable()
+APL.rows.append([f"{sum(L[t].X for t in range(q*3, (q+1)*3)):.0f}" for q in Q])
+APL.rows.append([f"{sum(O[t].X for t in range(q*3, (q+1)*3)):.0f}" for q in Q])
+APL.rows.append([f"{sum(L[t].X + O[t].X for t in range(q*3, (q+1)*3)):.0f}" for q in Q])
+APL.rows.header = ["Regular Time Labor Hours",
+                   "Overtime Labor Hours",
+                   "Total Labor Hours"]
+APL.columns.header = [f"Q{q+1}" for q in Q]
+APL.set_style(BeautifulTable.STYLE_GRID)
+print(APL)
+
 
 # Disaggregate Production Plan
-print("\nDisaggregate Production Plan")
-print("{:<8} {:<10} {:<10} {:<10}".format("Quarter", "Product A", "Product B", "Product C"))
-for q in Q:
-    prod_A = sum(P[t, 0].X for t in range(q*3, (q+1)*3))
-    prod_B = sum(P[t, 1].X for t in range(q*3, (q+1)*3))
-    prod_C = sum(P[t, 2].X for t in range(q*3, (q+1)*3))
-    print("{:<8} {:<10} {:<10} {:<10}".format(q+1, prod_A, prod_B, prod_C))
+print("\n\nDisaggregate Plan")
+DP = BeautifulTable()
+for g in goods:
+    DP.rows.append([int(I_init[g].X)] + [int(sum(P[t, g].X for t in range(q*3, (q+1)*3))) for q in Q])
+DP.rows.append([int(sum(I_init[g].X for g in goods))] + [int(sum(P[t, g].X for t in range(q*3, (q+1)*3) for g in goods)) for q in Q])
+DP.rows.header = [f"Product {i}" for i in ["A", "B", "C"]] + ["Total"]
+DP.columns.header = ["Initial Inventory"] + [f"Q{q+1}" for q in Q]
+DP.set_style(BeautifulTable.STYLE_GRID)
+print(DP)
 
 # Master Production Schedule
-print("\nMaster Production Schedule")
-print("{:<8} {:<10} {:<10} {:<10}".format("Period", "Product A", "Product B", "Product C"))
-for t in T:
-    print("{:<8} {:<10} {:<10} {:<10}".format(t+1, P[t, 0].X, P[t, 1].X, P[t, 2].X))
+print("\n\nMaster Production Schedule")
+MPS = BeautifulTable(maxwidth=100)
+for g in goods:
+    MPS.rows.append([int(I_init[g].X)] + [int(P[t, g].X) for t in T])
+MPS.rows.append(["--"] + [int(L[t].X + O[t].X) for t in T])
+MPS.rows.append(["--"] + [int(L[t].X) for t in T])
+MPS.rows.append(["--"] + [int(O[t].X) for t in T])
+MPS.rows.header = [f"Product {i}" for i in ["A", "B", "C"]] + ["Labor Hours", "Regular Hours", "Overtime Hours"]
+MPS.columns.header = ["Initial"] + [f"T{t+1}" for t in T]
+MPS.set_style(BeautifulTable.STYLE_GRID)
+print(MPS)
+# Be careful, this table is quite wide
+    # If you have insufficient characters per line it won't line up
+    
+
 
 # Materials Requirement Plan
-print("\nMaterials Requirement Plan")
-print("{:<8} {:<12} {:<8} {:<12} {:<10}".format("Period", "Blueberry", "Pear", "Strawberry", "Banana"))
-for t in T:
-    print("{:<8} {:<12} {:<8} {:<12} {:<10}".format(t+1, U[t, 0].X, U[t, 1].X, U[t, 2].X, U[t, 3].X))
+names = ["Blueberries", "Pears", "Strawberries", "Bananas"]
+# raw_lead_times = [1, 1, 2, 1] # B, G, R, Y
+for i in range(len(names)):
+    print(f"\n\n{names[i]} Materials requirements")
+    MR = BeautifulTable(maxwidth=100)
+    MR.rows.append(["---"] + [f"{U[t, i].X:.0f}" for t in T])
+    MR.rows.append(["---"] + ["---" for t in T])
+    MR.rows.append([f"{I_r_init[i].X:.0f}"] + ["---" for t in T])
+    requirements = [f"{U[0,i].X - I_r_init[i].X:.0f}"] + [f"{U[t,i].X:.0f}" for t in T[1:]]
+    MR.rows.append(["---"] + requirements)
+    MR.rows.append(["---"] + requirements[raw_lead_times[i]:] + ["--"] * raw_lead_times[i])
+    MR.rows.append(["---"] + [f"{R[t, i].X:.0f}" for t in T])
+    MR.rows.append(["---"] + ["---"]*raw_lead_times[i] + [f"{expected_quality[i] * R[t, i].X:.0f}" for t in T[:-raw_lead_times[i]]])
+    MR.rows.append([f"{I_r_init[i].X:.0f}"] + [f"{I_r[t, i].X:.0f}" for t in T])
+    MR.columns.header = ["Initial"] + [f"T{t+1}" for t in T]
+    MR.rows.header = ["Gross Requirements",
+                       "Scheduled Receipts",
+                       "Proj. On-hand Inv.",
+                       "Net Requirements",
+                       "Time Phased Req",
+                       "Planned Order Release",
+                       "Planned Order Delivery",
+                       "Proj. Ending Inv."]
+    MR.set_style(BeautifulTable.STYLE_GRID)
+    print(MR)
+
+
+
+
